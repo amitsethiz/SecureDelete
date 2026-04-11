@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# SecureDelete test / runtime artifacts
+test_out/
+test_out2/
+mock_drive.bin
+Recovered_Files/
+.securedelete_wipe/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
