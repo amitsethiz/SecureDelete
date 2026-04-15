@@ -1,1 +1,6 @@
+# Runtime dependencies
 customtkinter>=5.2.0
+
+# Build dependencies (only needed to compile the .exe)
+pillow>=10.0.0
+pyinstaller>=6.0.0
