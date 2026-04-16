@@ -609,137 +609,508 @@ def cmd_recover(args):
 
 
 # ---------------------------------------------------------------------------
-# System & Browser Cleaner
+# System & Browser Cleaner  (feature/privacy-deep-clean)
 # ---------------------------------------------------------------------------
 
-def close_browsers():
-    """Kill running instances of common browsers to release file locks."""
-    browsers = ["chrome.exe", "msedge.exe", "brave.exe", "firefox.exe", "opera.exe", "browser.exe"]
-    for b in browsers:
-        subprocess.run(["taskkill", "/F", "/IM", b], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+# Browsers whose process names must be killed before cleaning.
+_BROWSER_PROCS = [
+    "chrome.exe", "msedge.exe", "brave.exe", "firefox.exe",
+    "opera.exe", "browser.exe", "vivaldi.exe", "waterfox.exe",
+    "librewolf.exe", "chromium.exe", "iexplore.exe",
+]
 
-def get_browser_paths():
-    localappdata = os.environ.get('LOCALAPPDATA', '')
-    appdata = os.environ.get('APPDATA', '')
+def close_browsers():
+    """Kill running instances of all supported browsers to release file locks."""
+    for b in _BROWSER_PROCS:
+        subprocess.run(
+            ["taskkill", "/F", "/IM", b],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+
+
+def get_browser_paths() -> dict:
+    """
+    Return a mapping of browser display-name → profile root directory.
+    Every path is resolved from environment variables so it works for any
+    Windows user account without hardcoded usernames.
+    """
+    L = os.environ.get("LOCALAPPDATA", "")
+    A = os.environ.get("APPDATA", "")
     return {
-        "Chrome": os.path.join(localappdata, r"Google\Chrome\User Data"),
-        "Edge": os.path.join(localappdata, r"Microsoft\Edge\User Data"),
-        "Brave": os.path.join(localappdata, r"BraveSoftware\Brave-Browser\User Data"),
-        "Opera": os.path.join(appdata, r"Opera Software\Opera Stable"),
-        "Firefox": os.path.join(appdata, r"Mozilla\Firefox\Profiles")
+        # --- Chromium family ---
+        "Chrome":       os.path.join(L, r"Google\Chrome\User Data"),
+        "Edge":         os.path.join(L, r"Microsoft\Edge\User Data"),
+        "Brave":        os.path.join(L, r"BraveSoftware\Brave-Browser\User Data"),
+        "Opera":        os.path.join(A, r"Opera Software\Opera Stable"),
+        "Opera GX":     os.path.join(A, r"Opera Software\Opera GX Stable"),
+        "Vivaldi":      os.path.join(L, r"Vivaldi\User Data"),
+        "Chromium":     os.path.join(L, r"Chromium\User Data"),
+        # --- Firefox family ---
+        "Firefox":      os.path.join(A, r"Mozilla\Firefox\Profiles"),
+        "Waterfox":     os.path.join(A, r"Waterfox\Profiles"),
+        "LibreWolf":    os.path.join(A, r"LibreWolf\Profiles"),
+        # --- Internet Explorer / Edge Legacy ---
+        "IE Legacy":    os.path.join(L, r"Microsoft\Windows\INetCache"),
     }
+
+
+# ---------------------------------------------------------------------------
+# Chromium artifact helpers
+# ---------------------------------------------------------------------------
+
+# Directories inside a Chromium profile that are safe to wipe entirely
+# (cache, compiled code, GPU cache, network state, sessions, storage…)
+_CHROMIUM_WIPE_DIRS = [
+    "Cache",
+    "Code Cache",
+    "DawnCache",
+    "GPUCache",
+    "ShaderCache",
+    "PnaclTranslationCache",
+    "Media Cache",
+    "Application Cache",
+    "Service Worker",        # sub-dirs: CacheStorage, ScriptCache
+    "CacheStorage",
+    "Sessions",
+    "Session Storage",
+    "Local Storage",
+    "IndexedDB",
+    "databases",
+    "FileSystem",
+    "blob_storage",
+    "Download Service",
+    "GCM Store",
+    "AutofillStrikeDatabase",
+    "BudgetDatabase",
+    "data_reduction_proxy_leveldb",
+    "Feature Engagement Tracker",
+    "Media Engagement",
+    "Site Characteristics Database",
+    "Network Action Predictor",
+    "previews_opt_out.db",
+    "safe_browsing",
+]
+
+# Individual files inside a Chromium profile to shred (preserving
+# Login Data, Bookmarks, Preferences, Extensions, Secure Preferences).
+_CHROMIUM_WIPE_FILES = [
+    # History
+    "History",
+    "History-journal",
+    "Visited Links",
+    "Top Sites",
+    "Shortcuts",
+    "Shortcuts-journal",
+    # Cookies
+    "Cookies",
+    "Cookies-journal",
+    "Extension Cookies",
+    "Extension Cookies-journal",
+    # Network/Cookies (Edge-style path)
+    "Network/Cookies",
+    # Autofill (Web Data — NOT Login Data)
+    "Web Data",
+    "Web Data-journal",
+    # Sessions / tabs
+    "Current Session",
+    "Current Tabs",
+    "Last Session",
+    "Last Tabs",
+    # Downloads
+    "DownloadMetadata",
+    # Thumbnails / favicons
+    "Thumbnails",
+    "Favicons",
+    "Favicons-journal",
+    # Misc
+    "heavy_ad_intervention_opt_out.db",
+    "shared_proto_db",
+    "TransportSecurity",
+    "QuotaManager",
+    "QuotaManager-journal",
+]
+
+
+def _collect_chromium_targets(base_path: str) -> list:
+    """
+    Walk every profile directory under *base_path* and return a list of
+    file paths that should be shredded, honouring the preserve-list.
+    """
+    profiles = (
+        [os.path.join(base_path, "Default")]
+        + glob.glob(os.path.join(base_path, "Profile *"))
+        + [base_path]          # root-level caches (e.g. Opera Stable lives here)
+    )
+
+    targets = []
+    for profile in profiles:
+        if not os.path.isdir(profile):
+            continue
+
+        # --- Wipe entire sub-directories (all files recursively) ---
+        for dirname in _CHROMIUM_WIPE_DIRS:
+            d = os.path.join(profile, dirname)
+            if os.path.isdir(d):
+                targets.extend(
+                    glob.glob(os.path.join(d, "**", "*"), recursive=True)
+                )
+
+        # --- Wipe specific files (path separator handled for Network/ sub-path) ---
+        for fname in _CHROMIUM_WIPE_FILES:
+            fpath = os.path.join(profile, *fname.split("/"))
+            targets.append(fpath)
+
+    return targets
+
+
+# ---------------------------------------------------------------------------
+# Firefox artifact helpers
+# ---------------------------------------------------------------------------
+
+# Sub-directories inside each Firefox profile to wipe entirely.
+_FIREFOX_WIPE_DIRS = [
+    "cache2",
+    "startupCache",
+    "thumbnails",
+    "sessionstore-backups",
+    "storage",              # local/default/…  (IndexedDB, localStorage)
+    "storage.sqlite",       # older Firefox
+    "datareporting",
+    "crashes",
+    "minidumps",
+    "saved-telemetry-pings",
+]
+
+# Individual SQLite databases to shred (places.sqlite is intentionally
+# excluded to preserve bookmarks — see WAL files below for journal cleanup).
+_FIREFOX_WIPE_FILES = [
+    "cookies.sqlite",
+    "cookies.sqlite-shm",
+    "cookies.sqlite-wal",
+    "formhistory.sqlite",
+    "formhistory.sqlite-shm",
+    "formhistory.sqlite-wal",
+    "downloads.sqlite",
+    "downloads.sqlite-shm",
+    "downloads.sqlite-wal",
+    "content-prefs.sqlite",
+    "content-prefs.sqlite-shm",
+    "content-prefs.sqlite-wal",
+    "permissions.sqlite",
+    "permissions.sqlite-shm",
+    "permissions.sqlite-wal",
+    # places WAL only (full DB preserved for bookmarks)
+    "places.sqlite-shm",
+    "places.sqlite-wal",
+    # Session restore
+    "sessionstore.jsonlz4",
+    "sessionstore.js",
+    # Misc
+    "signedInUser.json",
+    "healthreport.sqlite",
+    "healthreport.sqlite-shm",
+    "healthreport.sqlite-wal",
+    "webappsstore.sqlite",
+    "webappsstore.sqlite-shm",
+    "webappsstore.sqlite-wal",
+    "chromeappsstore.sqlite",
+    "addons.json",        # add-on cache only, not extension data itself
+    "addonStartup.json.lz4",
+    "SiteSecurityServiceState.bin",
+    "AlternateServices.txt",
+]
+
+
+def _collect_firefox_targets(base_path: str) -> list:
+    """Walk all Firefox profile directories and collect files to shred."""
+    targets = []
+    for profile in glob.glob(os.path.join(base_path, "*")):
+        if not os.path.isdir(profile):
+            continue
+
+        for dirname in _FIREFOX_WIPE_DIRS:
+            d = os.path.join(profile, dirname)
+            if os.path.isdir(d):
+                targets.extend(
+                    glob.glob(os.path.join(d, "**", "*"), recursive=True)
+                )
+            elif os.path.isfile(d):   # some entries are files (e.g. storage.sqlite)
+                targets.append(d)
+
+        for fname in _FIREFOX_WIPE_FILES:
+            targets.append(os.path.join(profile, fname))
+
+    return targets
+
+
+# ---------------------------------------------------------------------------
+# Public browser shred API
+# ---------------------------------------------------------------------------
+
+def get_browser_data_summary(browser_name: str) -> tuple:
+    """
+    Return (file_count, total_bytes) for the privacy data the named browser
+    currently has on disk.  Used by the GUI to show live size estimates.
+    Returns (0, 0) if the browser is not installed.
+    """
+    paths = get_browser_paths()
+    base_path = paths.get(browser_name)
+    if not base_path or not os.path.exists(base_path):
+        return 0, 0
+
+    is_firefox_family = browser_name in ("Firefox", "Waterfox", "LibreWolf")
+    targets = (
+        _collect_firefox_targets(base_path)
+        if is_firefox_family
+        else _collect_chromium_targets(base_path)
+    )
+
+    count = 0
+    total = 0
+    for t in targets:
+        if os.path.isfile(t):
+            try:
+                total += os.path.getsize(t)
+                count += 1
+            except OSError:
+                pass
+    return count, total
+
 
 def shred_browser_data(browser_name: str, passes: int = 3, verbose: bool = True) -> tuple:
     """
-    Shred cache, history, cookies, and temp files for a given browser, 
-    preserving extensions and bookmarks.
+    Securely shred all privacy-sensitive data for *browser_name*.
+
+    Preserved (never touched):
+      - Login Data / key4.db / logins.json  (saved passwords)
+      - Bookmarks / places.sqlite            (browsing bookmarks)
+      - Extensions / extension_rules/        (installed add-ons)
+      - Preferences / Secure Preferences     (browser settings)
+
+    Shredded:
+      - All cache layers (HTTP cache, GPU, shader, code, media, SW)
+      - Cookies and cookie journals
+      - Browsing history, visited links, top sites
+      - Session / tab restore files
+      - Local Storage, IndexedDB, databases
+      - Form autofill (Web Data) — NOT passwords
+      - Download metadata
+      - Thumbnails, favicons
+      - Crash dumps, telemetry, health reports
     """
     paths = get_browser_paths()
     base_path = paths.get(browser_name)
     if not base_path or not os.path.exists(base_path):
         if verbose:
-            print(f"  [SKIP] {browser_name} data not found.")
+            print(f"  [SKIP] {browser_name} not installed or data not found.")
         return 0, 0
-    
-    success = 0
-    failed = 0
-    targets = []
-    
-    if browser_name == "Firefox":
-        for profile in glob.glob(os.path.join(base_path, "*")):
-            if os.path.isdir(profile):
-                targets.extend(glob.glob(os.path.join(profile, "cache2", "**", "*"), recursive=True))
-                targets.extend(glob.glob(os.path.join(profile, "startupCache", "**", "*"), recursive=True))
-                targets.append(os.path.join(profile, "cookies.sqlite"))
-                targets.append(os.path.join(profile, "formhistory.sqlite"))
-                targets.append(os.path.join(profile, "downloads.sqlite"))
-                # Note: history is in places.sqlite which also holds bookmarks. 
-                # For safety of bookmarks, we skip places.sqlite by default unless strict history deletion is needed.
-                targets.append(os.path.join(profile, "places.sqlite-shm"))
-                targets.append(os.path.join(profile, "places.sqlite-wal"))
+
+    is_firefox_family = browser_name in ("Firefox", "Waterfox", "LibreWolf")
+    is_ie_legacy      = browser_name == "IE Legacy"
+
+    if is_ie_legacy:
+        # INetCache root — wipe everything
+        targets = glob.glob(os.path.join(base_path, "**", "*"), recursive=True)
+    elif is_firefox_family:
+        targets = _collect_firefox_targets(base_path)
     else:
-        # Chromium based
-        profiles = [os.path.join(base_path, "Default")] + glob.glob(os.path.join(base_path, "Profile *")) + [base_path]
-        for profile in profiles:
-            if not os.path.exists(profile): continue
-            
-            targets.extend(glob.glob(os.path.join(profile, "Cache", "**", "*"), recursive=True))
-            targets.extend(glob.glob(os.path.join(profile, "Code Cache", "**", "*"), recursive=True))
-            targets.extend(glob.glob(os.path.join(profile, "DawnCache", "**", "*"), recursive=True))
-            targets.extend(glob.glob(os.path.join(profile, "GPUCache", "**", "*"), recursive=True))
-            targets.extend(glob.glob(os.path.join(profile, "Network", "Cookies*")))
-            targets.extend(glob.glob(os.path.join(profile, "Sessions", "**", "*"), recursive=True))
-            targets.extend(glob.glob(os.path.join(profile, "Session Storage", "**", "*"), recursive=True))
-            targets.append(os.path.join(profile, "History"))
-            targets.append(os.path.join(profile, "History-journal"))
-            targets.append(os.path.join(profile, "Visited Links"))
-            targets.append(os.path.join(profile, "Web Data"))
-            targets.append(os.path.join(profile, "Web Data-journal"))
-            targets.append(os.path.join(profile, "Cookies"))
-            targets.append(os.path.join(profile, "Cookies-journal"))
-            
-    # Shred collected targets
+        targets = _collect_chromium_targets(base_path)
+
+    success = 0
+    failed  = 0
     for t in targets:
         if os.path.isfile(t):
             if shred_file(t, passes=passes, verbose=False):
                 success += 1
             else:
                 failed += 1
-                
+
     if verbose:
         print(f"  [BROWSER] {browser_name}: Shredded {success} | Failed {failed}")
-        
+
     return success, failed
 
-def shred_system_activities(passes: int = 3, verbose: bool = True) -> tuple:
-    """Shred Windows temp, prefetch, and recent files."""
+
+# ---------------------------------------------------------------------------
+# System / OS privacy helpers
+# ---------------------------------------------------------------------------
+
+def shred_thumbnail_cache(passes: int = 3, verbose: bool = True) -> tuple:
+    """
+    Shred Windows Explorer thumbnail cache databases (thumbcache_*.db)
+    and taskbar jump-list thumbnail files.
+    """
+    L = os.environ.get("LOCALAPPDATA", "")
+    A = os.environ.get("APPDATA", "")
+
+    paths_to_clean = [
+        os.path.join(L, r"Microsoft\Windows\Explorer"),  # thumbcache DBs
+        os.path.join(A, r"Microsoft\Windows\Themes\CachedFiles"),
+    ]
+
+    success, failed = 0, 0
+    for path in paths_to_clean:
+        if not os.path.isdir(path):
+            continue
+        # Only target known thumbnail cache file patterns
+        patterns = ["thumbcache_*.db", "*.customDestinations-ms",
+                    "*.automaticDestinations-ms", "iconcache_*.db"]
+        for pat in patterns:
+            for fpath in glob.glob(os.path.join(path, pat)):
+                if os.path.isfile(fpath):
+                    if shred_file(fpath, passes=passes, verbose=False):
+                        success += 1
+                    else:
+                        failed += 1
+    if verbose:
+        print(f"  [THUMBS] Thumbnail cache: Shredded {success} | Failed {failed}")
+    return success, failed
+
+
+def shred_inet_cache(passes: int = 3, verbose: bool = True) -> tuple:
+    """
+    Shred Internet Explorer / Edge-Legacy cache stored in INetCache,
+    INetCookies and the unified WebCache database.
+    """
+    L = os.environ.get("LOCALAPPDATA", "")
+    paths = [
+        os.path.join(L, r"Microsoft\Windows\INetCache"),
+        os.path.join(L, r"Microsoft\Windows\INetCookies"),
+        os.path.join(L, r"Microsoft\Windows\Temporary Internet Files"),
+        os.path.join(L, r"Microsoft\Windows\WebCache"),
+    ]
+    success, failed = 0, 0
+    for path in paths:
+        if not os.path.isdir(path):
+            continue
+        file_count = sum(len(f) for _, _, f in os.walk(path))
+        if verbose:
+            print(f"  [INET] Cleaning {path} ({file_count} files)")
+        s, f = shred_directory(path, passes=passes, verbose=False)
+        os.makedirs(path, exist_ok=True)
+        success += s
+        failed  += f
+    if verbose:
+        print(f"  [INET] Total Shredded {success} | Failed {failed}")
+    return success, failed
+
+
+def shred_crash_dumps(passes: int = 3, verbose: bool = True) -> tuple:
+    """Shred Windows and application crash-dump files."""
+    L = os.environ.get("LOCALAPPDATA", "")
+    A = os.environ.get("APPDATA", "")
+    windir = os.environ.get("WINDIR", r"C:\Windows")
+
+    paths = [
+        os.path.join(L, "CrashDumps"),
+        os.path.join(L, r"Microsoft\Windows\WER\ReportArchive"),
+        os.path.join(L, r"Microsoft\Windows\WER\ReportQueue"),
+        os.path.join(A, r"Microsoft\Windows\WER"),
+        os.path.join(windir, "Minidump"),
+    ]
+    success, failed = 0, 0
+    for path in paths:
+        if not os.path.isdir(path):
+            continue
+        s, f = shred_directory(path, passes=passes, verbose=False)
+        os.makedirs(path, exist_ok=True)
+        success += s
+        failed  += f
+    if verbose:
+        print(f"  [CRASH] Crash dumps: Shredded {success} | Failed {failed}")
+    return success, failed
+
+
+def flush_dns_cache(verbose: bool = True):
+    """Flush the Windows DNS resolver cache via ipconfig /flushdns."""
+    if verbose:
+        print("  [DNS] Flushing DNS resolver cache...")
+    try:
+        subprocess.run(
+            ["ipconfig", "/flushdns"],
+            capture_output=True, check=True
+        )
+        if verbose:
+            print("  [DNS] DNS cache flushed successfully.")
+    except Exception as e:
+        if verbose:
+            print(f"  [DNS] Warning: DNS flush failed: {e}")
+
+
+def shred_system_activities(
+    passes: int = 3,
+    include_inet: bool = False,
+    include_crash_dumps: bool = False,
+    verbose: bool = True,
+) -> tuple:
+    """
+    Shred Windows temp, prefetch, recent files, and optionally
+    IE/Edge legacy caches and crash dumps.
+    """
     success = 0
-    failed = 0
-    
-    localappdata = os.environ.get('LOCALAPPDATA', '')
-    appdata = os.environ.get('APPDATA', '')
-    windir = os.environ.get('WINDIR', 'C:\\Windows')
-    temp = os.environ.get('TEMP', '')
-    
+    failed  = 0
+
+    L      = os.environ.get("LOCALAPPDATA", "")
+    A      = os.environ.get("APPDATA", "")
+    windir = os.environ.get("WINDIR", r"C:\Windows")
+    temp   = os.environ.get("TEMP", "")
+    ltemp  = os.path.join(L, "Temp")   # per-user temp, separate from %WINDIR%\Temp
+
     paths_to_shred = [
         os.path.join(windir, "Temp"),
         temp,
+        ltemp,
         os.path.join(windir, "Prefetch"),
-        os.path.join(appdata, r"Microsoft\Windows\Recent"),
-        os.path.join(localappdata, r"Microsoft\Windows\Explorer") # Explorer caches
+        os.path.join(A, r"Microsoft\Windows\Recent"),
+        os.path.join(A, r"Microsoft\Windows\Recent\AutomaticDestinations"),
+        os.path.join(A, r"Microsoft\Windows\Recent\CustomDestinations"),
+        os.path.join(L, r"Microsoft\Windows\Explorer"),  # thumbnail caches
     ]
-    
+
     for path in paths_to_shred:
-        if os.path.exists(path):
+        if path and os.path.isdir(path):
             file_count = sum(len(files) for _, _, files in os.walk(path))
             if verbose:
-                print(f"  [SYSTEM] Cleaning: {path} ({file_count} files, please wait...)")
+                print(f"  [SYSTEM] Cleaning: {path} ({file_count} files)")
             s, f = shred_directory(path, passes=passes, verbose=False)
-            os.makedirs(path, exist_ok=True) # Recreate empty directory
+            os.makedirs(path, exist_ok=True)
             success += s
-            failed += f
+            failed  += f
             if verbose:
                 print(f"           ✓ Done: {s} shredded, {f} failed")
-            
+
+    if include_inet:
+        s, f = shred_inet_cache(passes=passes, verbose=verbose)
+        success += s; failed += f
+
+    if include_crash_dumps:
+        s, f = shred_crash_dumps(passes=passes, verbose=verbose)
+        success += s; failed += f
+
     if verbose:
         print(f"  [SYSTEM] Total Shredded {success} | Failed {failed}\n")
     return success, failed
+
 
 def clear_event_logs(verbose: bool = True):
     """Clear Windows Event Logs using wevtutil (admin required for most)."""
     if verbose:
         print("  [LOGS] Clearing Windows Event Logs...")
     try:
-        # Get list of logs
-        result = subprocess.run(["wevtutil", "el"], capture_output=True, text=True, check=True)
-        logs = result.stdout.strip().split('\n')
+        result = subprocess.run(
+            ["wevtutil", "el"], capture_output=True, text=True, check=True
+        )
+        logs = result.stdout.strip().split("\n")
         success = 0
-        failed = 0
+        failed  = 0
         for log in logs:
             log = log.strip()
-            if not log: continue
+            if not log:
+                continue
             try:
-                subprocess.run(["wevtutil", "cl", log], capture_output=True, check=True)
+                subprocess.run(
+                    ["wevtutil", "cl", log], capture_output=True, check=True
+                )
                 success += 1
             except subprocess.CalledProcessError:
                 failed += 1
@@ -755,17 +1126,34 @@ def cmd_clean(args):
     print(f"\n{'=' * 60}")
     print(f"  SecureDelete — Privacy Cleanup")
     print(f"{'=' * 60}\n")
-    
+
+    browsers = [
+        "Chrome", "Edge", "Brave", "Firefox", "Opera",
+        "Opera GX", "Vivaldi", "Chromium",
+        "Waterfox", "LibreWolf", "IE Legacy",
+    ]
+
     if args.browsers:
         print("  [INFO] Closing browsers...")
         close_browsers()
-        time.sleep(1) # Give processes a moment to quit
-        for browser in ["Chrome", "Edge", "Brave", "Firefox", "Opera"]:
+        time.sleep(1)
+        for browser in browsers:
             shred_browser_data(browser, passes=args.passes, verbose=True)
 
     if args.system:
-        shred_system_activities(passes=args.passes, verbose=True)
-        
+        shred_system_activities(
+            passes=args.passes,
+            include_inet=getattr(args, "inet", False),
+            include_crash_dumps=getattr(args, "crash_dumps", False),
+            verbose=True,
+        )
+
+    if getattr(args, "dns", False):
+        flush_dns_cache(verbose=True)
+
+    if getattr(args, "thumbnails", False):
+        shred_thumbnail_cache(passes=args.passes, verbose=True)
+
     if args.logs:
         clear_event_logs(verbose=True)
 
@@ -1199,6 +1587,27 @@ Examples:
         "--logs",
         action="store_true",
         help="Clear Windows Event Logs (requires admin)"
+    )
+    clean_parser.add_argument(
+        "--inet",
+        action="store_true",
+        help="Shred IE / Edge-Legacy INetCache and WebCache"
+    )
+    clean_parser.add_argument(
+        "--crash-dumps",
+        dest="crash_dumps",
+        action="store_true",
+        help="Shred Windows crash-dump and WER report files"
+    )
+    clean_parser.add_argument(
+        "--dns",
+        action="store_true",
+        help="Flush the Windows DNS resolver cache (ipconfig /flushdns)"
+    )
+    clean_parser.add_argument(
+        "--thumbnails",
+        action="store_true",
+        help="Shred Windows Explorer thumbnail cache (thumbcache_*.db)"
     )
     clean_parser.add_argument(
         "-p", "--passes",

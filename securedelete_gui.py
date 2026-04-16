@@ -11,6 +11,7 @@ from securedelete import (
     make_fill_data, random_name,
     shred_file, shred_directory,
     wipe_free_space,
+    get_browser_data_summary,
 )
 
 
@@ -353,9 +354,6 @@ class SecureDeleteApp(ctk.CTk):
 
         self.refresh_wipe_drives()
 
-    # ───────────────────────────────────────────────────────────────────────
-    # PRIVACY TAB
-    # ───────────────────────────────────────────────────────────────────────
     def setup_clean_tab(self):
         # ── Bottom row: Passes + Action  (packed FIRST so cols can fill remaining space) ──
         bottom = ctk.CTkFrame(self.tab_clean, fg_color="transparent")
@@ -392,55 +390,88 @@ class SecureDeleteApp(ctk.CTk):
         )
         self.btn_clean_action.pack(fill="x")
 
-        # ── Two-column card layout (fills remaining space above the button) ──
+        # ── Scrollable two-column layout (fills remaining space above the button) ──
         cols = ctk.CTkFrame(self.tab_clean, fg_color="transparent")
         cols.pack(fill="both", expand=True, pady=(4, 0))
         cols.columnconfigure(0, weight=1)
         cols.columnconfigure(1, weight=1)
 
-        # ── Left: System Traces ──
-        sys_card = ctk.CTkFrame(cols, fg_color=CARD, border_color=BORDER,
-                                border_width=1, corner_radius=8)
-        sys_card.grid(row=0, column=0, sticky="nsew", padx=(0, 5), pady=2)
+        # ═══════════════════════════════════════════════
+        # LEFT COLUMN — System Traces
+        # ═══════════════════════════════════════════════
+        sys_scroll = ctk.CTkScrollableFrame(
+            cols, fg_color=CARD, border_color=BORDER,
+            border_width=1, corner_radius=8,
+            scrollbar_button_color=BORDER, scrollbar_button_hover_color="#484f58"
+        )
+        sys_scroll.grid(row=0, column=0, sticky="nsew", padx=(0, 5), pady=2)
 
-        ctk.CTkLabel(sys_card, text="🖥  SYSTEM TRACES",
+        ctk.CTkLabel(sys_scroll, text="🖥  SYSTEM TRACES",
                      font=ctk.CTkFont("Segoe UI", 12, "bold"), text_color=MUTED
-                     ).pack(anchor="w", padx=14, pady=(12, 4))
-        ctk.CTkFrame(sys_card, fg_color=BORDER, height=1).pack(fill="x", padx=10, pady=(0, 8))
+                     ).pack(anchor="w", padx=14, pady=(10, 4))
+        ctk.CTkFrame(sys_scroll, fg_color=BORDER, height=1).pack(fill="x", padx=10, pady=(0, 6))
 
-        self.sw_temp    = self._switch_row(sys_card, "Temp & Prefetch Files",
-                                           "Windows Temp, system prefetch cache", on=True)
-        self.sw_recent  = self._switch_row(sys_card, "Recent Files",
-                                           "Windows Recent & Jump Lists", on=True)
-        self.sw_explorer= self._switch_row(sys_card, "Explorer Cache",
-                                           "Thumbnail & Quick Access caches", on=True)
-        self.sw_logs    = self._switch_row(sys_card, "Windows Event Logs",
-                                           "Requires admin  •  clears 1000+ logs", on=False)
+        self.sw_temp       = self._switch_row(sys_scroll, "Temp & Prefetch Files",
+                                              "Windows Temp, user Temp, Prefetch cache", on=True)
+        self.sw_recent     = self._switch_row(sys_scroll, "Recent Files & Jump Lists",
+                                              "Windows Recent, AutoDest, CustomDest", on=True)
+        self.sw_explorer   = self._switch_row(sys_scroll, "Explorer Thumbnail Cache",
+                                              "thumbcache_*.db, iconcache_*.db", on=True)
+        self.sw_inet       = self._switch_row(sys_scroll, "IE / Edge Legacy Cache",
+                                              "INetCache, INetCookies, WebCache DB", on=True)
+        self.sw_crash      = self._switch_row(sys_scroll, "Crash Dumps & WER Reports",
+                                              "CrashDumps, WER ReportArchive/Queue", on=False)
+        self.sw_dns        = self._switch_row(sys_scroll, "Flush DNS Cache",
+                                              "ipconfig /flushdns", on=False)
+        self.sw_logs       = self._switch_row(sys_scroll, "Windows Event Logs",
+                                              "Requires admin  •  clears 1000+ logs", on=False)
+        ctk.CTkFrame(sys_scroll, fg_color="transparent", height=6).pack()
 
-        # Spacer
-        ctk.CTkFrame(sys_card, fg_color="transparent", height=8).pack()
+        # ═══════════════════════════════════════════════
+        # RIGHT COLUMN — Browser Data
+        # ═══════════════════════════════════════════════
+        br_scroll = ctk.CTkScrollableFrame(
+            cols, fg_color=CARD, border_color=BORDER,
+            border_width=1, corner_radius=8,
+            scrollbar_button_color=BORDER, scrollbar_button_hover_color="#484f58"
+        )
+        br_scroll.grid(row=0, column=1, sticky="nsew", padx=(5, 0), pady=2)
 
-        # ── Right: Browser History ──
-        br_card = ctk.CTkFrame(cols, fg_color=CARD, border_color=BORDER,
-                               border_width=1, corner_radius=8)
-        br_card.grid(row=0, column=1, sticky="nsew", padx=(5, 0), pady=2)
-
-        ctk.CTkLabel(br_card, text="🌐  BROWSER HISTORY",
+        ctk.CTkLabel(br_scroll, text="🌐  BROWSER DATA",
                      font=ctk.CTkFont("Segoe UI", 12, "bold"), text_color=MUTED
-                     ).pack(anchor="w", padx=14, pady=(12, 4))
-        ctk.CTkFrame(br_card, fg_color=BORDER, height=1).pack(fill="x", padx=10, pady=(0, 4))
-        ctk.CTkLabel(br_card,
-                     text="Shreds history, cache & cookies.\nExtensions and bookmarks are preserved.",
-                     font=ctk.CTkFont("Segoe UI", 10), text_color=MUTED, justify="left"
-                     ).pack(anchor="w", padx=14, pady=(0, 8))
+                     ).pack(anchor="w", padx=14, pady=(10, 4))
+        ctk.CTkFrame(br_scroll, fg_color=BORDER, height=1).pack(fill="x", padx=10, pady=(0, 4))
+        ctk.CTkLabel(
+            br_scroll,
+            text="History  •  Cache  •  Cookies  •  Sessions  •  Storage  •  Autofill\n"
+                 "Passwords, bookmarks & extensions are always preserved.",
+            font=ctk.CTkFont("Segoe UI", 10), text_color=MUTED, justify="left"
+        ).pack(anchor="w", padx=14, pady=(0, 8))
 
-        self.sw_chrome  = self._switch_row(br_card, "Chrome",  "Google Chrome",    on=False)
-        self.sw_edge    = self._switch_row(br_card, "Edge",    "Microsoft Edge",   on=False)
-        self.sw_brave   = self._switch_row(br_card, "Brave",   "Brave Browser",    on=False)
-        self.sw_firefox = self._switch_row(br_card, "Firefox", "Mozilla Firefox",  on=False)
-        self.sw_opera   = self._switch_row(br_card, "Opera",   "Opera Browser",    on=False)
+        # (switch_widget, browser_name, size_label_widget)
+        self._browser_rows: list = []
 
-        ctk.CTkFrame(br_card, fg_color="transparent", height=8).pack()
+        browser_defs = [
+            ("Chrome",    "Google Chrome"),
+            ("Edge",      "Microsoft Edge"),
+            ("Brave",     "Brave Browser"),
+            ("Firefox",   "Mozilla Firefox"),
+            ("Opera",     "Opera Browser"),
+            ("Opera GX",  "Opera GX"),
+            ("Vivaldi",   "Vivaldi Browser"),
+            ("Chromium",  "Chromium (portable)"),
+            ("Waterfox",  "Waterfox"),
+            ("LibreWolf", "LibreWolf"),
+            ("IE Legacy", "IE / Edge Legacy"),
+        ]
+        for bname, bdesc in browser_defs:
+            sw, lbl = self._browser_switch_row(br_scroll, bname, bdesc)
+            self._browser_rows.append((sw, bname, lbl))
+        ctk.CTkFrame(br_scroll, fg_color="transparent", height=6).pack()
+
+        # Kick off background size scan
+        threading.Thread(target=self._scan_browser_sizes, daemon=True).start()
+
 
     def _switch_row(self, parent, title: str, subtitle: str, on: bool = False) -> ctk.CTkSwitch:
         row = ctk.CTkFrame(parent, fg_color="transparent")
@@ -462,6 +493,47 @@ class SecureDeleteApp(ctk.CTk):
         if on:
             sw.select()
         return sw
+
+    def _browser_switch_row(self, parent, title: str, subtitle: str) -> tuple:
+        """Switch row that also shows a live size label. Returns (switch, size_label)."""
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=12, pady=4)
+
+        sw = ctk.CTkSwitch(row, text="", width=52,
+                           button_color=RED, button_hover_color=RED_H,
+                           progress_color=RED, fg_color=BORDER)
+        sw.pack(side="right")
+
+        txt = ctk.CTkFrame(row, fg_color="transparent")
+        txt.pack(side="left", fill="x", expand=True)
+        ctk.CTkLabel(txt, text=title, anchor="w",
+                     font=ctk.CTkFont("Segoe UI", 12, "bold"), text_color=TEXT
+                     ).pack(anchor="w")
+        srow = ctk.CTkFrame(txt, fg_color="transparent")
+        srow.pack(anchor="w", fill="x")
+        ctk.CTkLabel(srow, text=subtitle, anchor="w",
+                     font=ctk.CTkFont("Segoe UI", 10), text_color=MUTED
+                     ).pack(side="left")
+        size_lbl = ctk.CTkLabel(srow, text="  scanning…", anchor="w",
+                                font=ctk.CTkFont("Segoe UI", 10), text_color="#444c56")
+        size_lbl.pack(side="left")
+        return sw, size_lbl
+
+    def _scan_browser_sizes(self):
+        """Background thread: scan each browser's data size and update the label."""
+        for sw, bname, lbl in self._browser_rows:
+            try:
+                count, total = get_browser_data_summary(bname)
+                if total > 0:
+                    text = f"  •  {format_bytes(total)} ({count} files)"
+                    color = MUTED
+                else:
+                    text = "  •  not installed"
+                    color = "#444c56"
+            except Exception:
+                text = ""
+                color = "#444c56"
+            self.after(0, lambda l=lbl, t=text, c=color: l.configure(text=t, text_color=c))
 
     # ───────────────────────────────────────────────────────────────────────
     # RECOVER TAB
@@ -702,30 +774,26 @@ class SecureDeleteApp(ctk.CTk):
             state="normal", text="🧹  WIPE FREE SPACE"))
         self.after(0, lambda: self.btn_wipe_stop.configure(state="disabled"))
 
-    # ───────────────────────────────────────────────────────────────────────
-    # PRIVACY CLEAN THREAD
-    # ───────────────────────────────────────────────────────────────────────
+
     def run_clean(self):
-        any_on = any(sw.get() for sw in [
-            self.sw_temp, self.sw_recent, self.sw_explorer, self.sw_logs,
-            self.sw_chrome, self.sw_edge, self.sw_brave, self.sw_firefox, self.sw_opera
-        ])
+        any_on = any(sw.get() for sw, _, _ in self._browser_rows) or \
+                 any([self.sw_temp.get(), self.sw_recent.get(), self.sw_explorer.get(),
+                      self.sw_inet.get(), self.sw_crash.get(), self.sw_dns.get(), self.sw_logs.get()])
         if not any_on:
-            messagebox.showwarning("Nothing Selected",
-                                   "Enable at least one cleanup option first.")
+            messagebox.showwarning("Nothing Selected", "Enable at least one cleanup option first.")
             return
-        if messagebox.askyesno(
-            "⚠  Confirm Privacy Cleanup",
-            "Selected system traces and browser histories will be permanently shredded.\n"
-            "Open browsers will be closed automatically.\n\nContinue?"
-        ):
+        if messagebox.askyesno("⚠  Confirm Privacy Cleanup", "Selected system traces and browser histories will be permanently shredded.\nOpen browsers will be closed automatically.\n\nContinue?"):
             self.btn_clean_action.configure(state="disabled", text="⏳  Cleaning…")
             self.after(0, lambda: self.clean_progress.set(0))
             self.after(0, lambda: self.clean_status_lbl.configure(text="🔍  Scanning...", text_color=MUTED))
             threading.Thread(target=self._clean_thread, daemon=True).start()
 
     def _clean_thread(self):
-        from securedelete import clear_event_logs, close_browsers, shred_browser_data
+        from securedelete import (
+            clear_event_logs, close_browsers, shred_browser_data,
+            shred_system_activities, shred_inet_cache, shred_crash_dumps,
+            flush_dns_cache, shred_thumbnail_cache,
+        )
         passes = int(self.clean_passes.get())
 
         def _set_progress(pct: float, status: str = "", color=None):
@@ -734,102 +802,109 @@ class SecureDeleteApp(ctk.CTk):
                 c = color or MUTED
                 self.after(0, lambda s=status, cl=c: self.clean_status_lbl.configure(text=s, text_color=cl))
 
-        print(f"\n{'='*60}")
-        print(f"  Privacy Cleanup  (passes: {passes})")
-        print(f"{'='*60}\n")
-
-        # ── Snapshot free space before cleanup ──
         sys_drive = os.environ.get("SYSTEMDRIVE", "C:") + "\\"
         try:
             free_before = shutil.disk_usage(sys_drive).free
         except Exception:
             free_before = 0
 
-        # ── Build path list ──
-        localappdata = os.environ.get("LOCALAPPDATA", "")
-        appdata      = os.environ.get("APPDATA", "")
-        windir       = os.environ.get("WINDIR", "C:\\Windows")
-        temp         = os.environ.get("TEMP", "")
+        # ── Collect which browsers to clean ──
+        to_clean = [bname for sw, bname, _ in self._browser_rows if sw.get()]
 
-        paths_map = []
+        # ── Estimate total work for progress bar ──
+        total_steps  = sum([
+            bool(self.sw_temp.get()),
+            bool(self.sw_recent.get()),
+            bool(self.sw_explorer.get()),
+            bool(self.sw_inet.get()),
+            bool(self.sw_crash.get()),
+            bool(self.sw_dns.get()),
+            bool(self.sw_logs.get()),
+            len(to_clean),
+        ])
+        total_steps = max(total_steps, 1)
+        step        = 0
+
+        def _advance(label: str):
+            nonlocal step
+            pct = step / total_steps
+            _set_progress(pct, f"  {pct*100:.0f}%  —  {label}")
+            step += 1
+
+        # ══════════════════════════════════════════
+        # SYSTEM TRACES
+        # ══════════════════════════════════════════
+
+        # Temp & Prefetch
         if self.sw_temp.get():
-            paths_map += [
-                os.path.join(windir, "Temp"),
-                temp,
-                os.path.join(windir, "Prefetch"),
-            ]
-        if self.sw_recent.get():
-            paths_map.append(os.path.join(appdata, r"Microsoft\Windows\Recent"))
-        if self.sw_explorer.get():
-            paths_map.append(os.path.join(localappdata, r"Microsoft\Windows\Explorer"))
-
-        browser_map = [
-            (self.sw_chrome,  "Chrome"),
-            (self.sw_edge,    "Edge"),
-            (self.sw_brave,   "Brave"),
-            (self.sw_firefox, "Firefox"),
-            (self.sw_opera,   "Opera"),
-        ]
-        to_clean = [name for sw, name in browser_map if sw.get()]
-
-        # ── Pre-scan: measure disk footprint of every system path ──
-        def _dir_bytes(path: str) -> int:
-            total = 0
-            try:
-                for root, _, files in os.walk(path):
-                    for f in files:
-                        try: total += os.path.getsize(os.path.join(root, f))
-                        except OSError: pass
-            except Exception: pass
-            return total
-
-        _set_progress(0, "🔍  Pre-scanning paths...")
-        BROWSER_EST = 50 * 1024 * 1024          # 50 MB flat estimate per browser
-        path_sizes  = {p: _dir_bytes(p) for p in paths_map if os.path.exists(p)}
-        total_sys   = sum(path_sizes.values())
-        total_bytes = max(total_sys + len(to_clean) * BROWSER_EST, 1)
-        done_bytes  = 0
-
-        # ── System paths ──
-        if paths_map:
-            total_s, total_f = 0, 0
-            for path in paths_map:
-                if os.path.exists(path):
-                    pb   = path_sizes.get(path, 0)
-                    pct  = done_bytes / total_bytes
-                    name = os.path.basename(path) or path
-                    file_count = sum(len(files) for _, _, files in os.walk(path))
-                    _set_progress(pct, f"  {pct*100:.0f}%  —  Cleaning {name}  ({file_count} files)...")
-                    print(f"  [SYSTEM] Cleaning: {path} ({file_count} files, {format_bytes(pb)})")
+            _advance("Cleaning Temp & Prefetch...")
+            L      = os.environ.get("LOCALAPPDATA", "")
+            windir = os.environ.get("WINDIR", "C:\\Windows")
+            temp   = os.environ.get("TEMP", "")
+            for path in [os.path.join(windir, "Temp"), temp,
+                         os.path.join(L, "Temp"),
+                         os.path.join(windir, "Prefetch")]:
+                if path and os.path.isdir(path):
+                    fc = sum(len(f) for _, _, f in os.walk(path))
+                    print(f"  [SYSTEM] Cleaning {path} ({fc} files)")
                     s, f = shred_directory(path, passes=passes, verbose=False)
                     os.makedirs(path, exist_ok=True)
-                    total_s += s; total_f += f
-                    done_bytes += pb
-                    pct = done_bytes / total_bytes
-                    _set_progress(pct, f"  {pct*100:.0f}%  —  ✓ {name} done  ({format_bytes(pb)} removed)")
-                    print(f"           ✓ Done: {s} shredded, {f} failed  ({format_bytes(pb)})")
-            print(f"  [SYSTEM] Total: {total_s} shredded, {total_f} failed\n")
+                    print(f"           ✓ {s} shredded, {f} failed")
 
-        # ── Event logs ──
+        # Recent Files & Jump Lists
+        if self.sw_recent.get():
+            _advance("Cleaning Recent Files & Jump Lists...")
+            A = os.environ.get("APPDATA", "")
+            for path in [
+                os.path.join(A, r"Microsoft\Windows\Recent"),
+                os.path.join(A, r"Microsoft\Windows\Recent\AutomaticDestinations"),
+                os.path.join(A, r"Microsoft\Windows\Recent\CustomDestinations"),
+            ]:
+                if os.path.isdir(path):
+                    s, f = shred_directory(path, passes=passes, verbose=False)
+                    os.makedirs(path, exist_ok=True)
+                    print(f"  [SYSTEM] Recent: {s} shredded, {f} failed")
+
+        # Explorer Thumbnail Cache
+        if self.sw_explorer.get():
+            _advance("Cleaning Explorer Thumbnail Cache...")
+            shred_thumbnail_cache(passes=passes, verbose=True)
+
+        # IE / Edge Legacy Cache
+        if self.sw_inet.get():
+            _advance("Cleaning IE / Edge Legacy Cache...")
+            shred_inet_cache(passes=passes, verbose=True)
+
+        # Crash Dumps
+        if self.sw_crash.get():
+            _advance("Cleaning Crash Dumps...")
+            shred_crash_dumps(passes=passes, verbose=True)
+
+        # DNS
+        if self.sw_dns.get():
+            _advance("Flushing DNS Cache...")
+            flush_dns_cache(verbose=True)
+
+        # Event Logs
         if self.sw_logs.get():
-            pct = done_bytes / total_bytes
-            _set_progress(pct, f"  {pct*100:.0f}%  —  Clearing Windows Event Logs...")
+            _advance("Clearing Windows Event Logs...")
             clear_event_logs(verbose=True)
 
-        # ── Browsers ──
+        # ══════════════════════════════════════════
+        # BROWSERS
+        # ══════════════════════════════════════════
         if to_clean:
-            pct = done_bytes / total_bytes
-            _set_progress(pct, f"  {pct*100:.0f}%  —  Closing browsers...")
+            _set_progress(step / total_steps, "  Closing browsers...")
             print("  [BROWSER] Closing browsers...")
             close_browsers()
             time.sleep(1)
             for browser in to_clean:
-                pct = done_bytes / total_bytes
-                _set_progress(pct, f"  {pct*100:.0f}%  —  Cleaning {browser}...")
+                _advance(f"Cleaning {browser}...")
                 shred_browser_data(browser, passes=passes, verbose=True)
-                done_bytes += BROWSER_EST
-                pct = done_bytes / total_bytes
-                _set_progress(pct, f"  {pct*100:.0f}%  —  ✓ {browser} cleaned")
+                for sw, bname, lbl in self._browser_rows:
+                    if bname == browser:
+                        self.after(0, lambda l=lbl: l.configure(
+                            text="  •  cleaned ✓", text_color=SUCCESS))
 
         # ── Space freed summary ──
         try:
