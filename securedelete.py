@@ -39,6 +39,46 @@ TEMP_DIR_NAME = ".securedelete_wipe"
 
 
 # ---------------------------------------------------------------------------
+# Logging (audit trail — optional, enabled via --log)
+# ---------------------------------------------------------------------------
+
+class _TeeStream:
+    """Wraps stdout so output is written to both the terminal and a log file."""
+    def __init__(self, stream, log_file):
+        self._stream = stream
+        self._log = log_file
+
+    def write(self, data):
+        try:
+            self._stream.write(data)
+        except UnicodeEncodeError:
+            # Terminal encoding (e.g. cp1252) can't represent some chars — strip them.
+            enc = getattr(self._stream, "encoding", "ascii") or "ascii"
+            self._stream.write(data.encode(enc, errors="replace").decode(enc))
+        self._log.write(data)
+        self._log.flush()
+
+    def flush(self):
+        self._stream.flush()
+        self._log.flush()
+
+    def fileno(self):
+        return self._stream.fileno()
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
+def _setup_log(log_path: str):
+    """Redirect stdout through a tee so all output is also written to log_path."""
+    log_file = open(log_path, "a", encoding="utf-8")
+    log_file.write(f"\n{'='*60}\n")
+    log_file.write(f"  SecureDelete audit log — {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    log_file.write(f"{'='*60}\n")
+    sys.stdout = _TeeStream(sys.stdout, log_file)
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -403,7 +443,7 @@ def carve_drive(drive: str, out_dir: str, max_scan_bytes: int = 100 * 1024 * 102
     Raw disk signature-based carver for permanently deleted files.
     """
     if not types:
-        types = ['jpg', 'png', 'pdf', 'zip']
+        types = ['jpg', 'png', 'pdf', 'zip', 'mp4', 'mp3', 'sqlite']
         
     os.makedirs(out_dir, exist_ok=True)
     
@@ -413,12 +453,21 @@ def carve_drive(drive: str, out_dir: str, max_scan_bytes: int = 100 * 1024 * 102
         raw_drive = drive
         
     sigs = {
-        'jpg': (b"\xFF\xD8\xFF", b"\xFF\xD9", 20 * 1024 * 1024),
-        'png': (b"\x89PNG\r\n\x1A\n", b"IEND\xAE\x42\x60\x82", 20 * 1024 * 1024),
-        'pdf': (b"%PDF-", b"%%EOF", 50 * 1024 * 1024),
-        'zip': (b"PK\x03\x04", b"PK\x05\x06", 50 * 1024 * 1024)
+        'jpg':    (b"\xFF\xD8\xFF",           b"\xFF\xD9",               20 * 1024 * 1024),
+        'png':    (b"\x89PNG\r\n\x1A\n",      b"IEND\xAE\x42\x60\x82",  20 * 1024 * 1024),
+        'pdf':    (b"%PDF-",                  b"%%EOF",                  50 * 1024 * 1024),
+        'zip':    (b"PK\x03\x04",             b"PK\x05\x06",             50 * 1024 * 1024),
+        # DOCX/XLSX/PPTX are ZIP-based; use the docProps/app.xml interior marker to
+        # distinguish them from plain ZIPs (best-effort — overlaps with zip sig).
+        'docx':   (b"PK\x03\x04",             b"PK\x05\x06",             50 * 1024 * 1024),
+        # MP4 / MOV — ftyp box at offset 4
+        'mp4':    (b"ftyp",                   b"mdat",                  500 * 1024 * 1024),
+        # MP3 — ID3 tag header or raw MPEG sync word
+        'mp3':    (b"ID3",                    b"\xFF\xE0",               30 * 1024 * 1024),
+        # SQLite database files
+        'sqlite': (b"SQLite format 3\x00",    b"\x00\x00\x00\x00",      100 * 1024 * 1024),
     }
-    
+
     active_sigs = {k: v for k, v in sigs.items() if k in types}
     if not active_sigs:
         return 0
@@ -549,8 +598,9 @@ def cmd_recover(args):
                 sys.stdout.write(f"\r  [SCANNING] {format_bytes(current)} -- Found: {found} files")
             sys.stdout.flush()
 
+        types = [t.strip().lower() for t in args.file_types.split(",")] if getattr(args, "file_types", None) else None
         start_time = time.time()
-        found = carve_drive(drive, out_dir, max_scan_bytes=limit_bytes, update_callback=cli_update)
+        found = carve_drive(drive, out_dir, max_scan_bytes=limit_bytes, types=types, update_callback=cli_update)
         elapsed = time.time() - start_time
 
         print(f"\n\n  Done in {format_time(elapsed)}")
@@ -1549,6 +1599,10 @@ Examples:
         action="store_true",
         help="Skip confirmation prompt"
     )
+    shred_parser.add_argument(
+        "--log", metavar="FILE",
+        help="Append a full audit trail of all output to FILE"
+    )
 
     # --- wipe subcommand ---
     wipe_parser = subparsers.add_parser(
@@ -1575,6 +1629,10 @@ Examples:
         "--dry-run",
         action="store_true",
         help="Simulate the wipe without writing data"
+    )
+    wipe_parser.add_argument(
+        "--log", metavar="FILE",
+        help="Append a full audit trail of all output to FILE"
     )
 
     # --- clean subcommand ---
@@ -1625,6 +1683,10 @@ Examples:
         default=3,
         help="Number of overwrite passes (default: 3)"
     )
+    clean_parser.add_argument(
+        "--log", metavar="FILE",
+        help="Append a full audit trail of all output to FILE"
+    )
 
     # --- recover subcommand ---
     recover_parser = subparsers.add_parser(
@@ -1658,8 +1720,20 @@ Examples:
         default=1024,
         help="Maximum amount of drive space to scan in MB (default: 1024 MB, 0 for full drive)"
     )
+    recover_parser.add_argument(
+        "--file-types",
+        dest="file_types",
+        default=None,
+        metavar="TYPES",
+        help="Comma-separated list of file types to recover during deep scan "
+             "(e.g. jpg,pdf,mp4). Supported: jpg,png,pdf,zip,docx,mp4,mp3,sqlite. "
+             "Default: all types."
+    )
 
     args = parser.parse_args()
+
+    if getattr(args, "log", None):
+        _setup_log(args.log)
 
     if args.command == "shred":
         cmd_shred(args)
