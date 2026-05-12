@@ -6,6 +6,7 @@ from tkinter import filedialog, messagebox
 
 # Backend — import shared functions from the CLI module (no duplication)
 from securedelete import (
+    VERSION,
     CHUNK_SIZE, TEMP_DIR_NAME,
     get_free_space, format_bytes, format_time,
     make_fill_data, random_name,
@@ -104,7 +105,7 @@ class SecureDeleteApp(ctk.CTk):
         ).pack(side="right", padx=20)
 
         ctk.CTkLabel(
-            hdr, text="Secure file shredder & privacy cleaner  •  v1.0",
+            hdr, text=f"Secure file shredder & privacy cleaner  •  v{VERSION}",
             font=ctk.CTkFont("Segoe UI", 12), text_color=MUTED
         ).pack(side="right", padx=4)
 
