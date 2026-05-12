@@ -33,6 +33,7 @@ import stat
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
+VERSION = "1.0"
 CHUNK_SIZE = 4 * 1024 * 1024  # 4 MB write chunks
 TEMP_DIR_NAME = ".securedelete_wipe"
 
@@ -312,6 +313,10 @@ def cmd_shred(args):
     if total_failed:
         print(f"  Failed   : {total_failed} file(s)")
     print(f"  Files are PERMANENTLY destroyed and UNRECOVERABLE.")
+    print(f"  NOTE: On SSDs/NVMe drives, overwrite-based shredding may")
+    print(f"  not be fully reliable due to wear-leveling and internal")
+    print(f"  drive remapping. Full-drive encryption before use is the")
+    print(f"  most reliable protection on solid-state media.")
     print(f"{'=' * 60}\n")
 
 
@@ -1494,7 +1499,7 @@ def cmd_wipe(args):
 def main():
     parser = argparse.ArgumentParser(
         prog="securedelete",
-        description="Securely shred files or wipe free disk space to prevent data recovery.",
+        description=f"SecureDelete v{VERSION} — Securely shred files or wipe free disk space to prevent data recovery.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Commands:
@@ -1514,6 +1519,7 @@ Examples:
         """
     )
 
+    parser.add_argument("--version", action="version", version=f"SecureDelete {VERSION}")
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
     # --- shred subcommand ---
