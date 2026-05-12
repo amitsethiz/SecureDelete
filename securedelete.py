@@ -17,7 +17,9 @@ Usage:
 """
 
 import argparse
+import base64
 import glob
+import json
 import os
 import secrets
 import shutil
@@ -318,9 +320,6 @@ def cmd_shred(args):
 # ---------------------------------------------------------------------------
 
 def get_recycle_bin_items():
-    import base64
-    import json
-    import subprocess
     ps_cmd = """
     $ErrorActionPreference = "Stop"
     $Shell = New-Object -ComObject Shell.Application
@@ -364,7 +363,6 @@ def recover_recycle_bin_item(item_path):
     than interpolated into the script string, which eliminates the PowerShell
     injection risk that existed with the previous f-string approach.
     """
-    import base64
     # No f-string — path is injected via the process environment, not the script.
     ps_cmd = """
     $targetPath = $env:SD_ITEM_PATH
@@ -399,8 +397,6 @@ def carve_drive(drive: str, out_dir: str, max_scan_bytes: int = 100 * 1024 * 102
     """
     Raw disk signature-based carver for permanently deleted files.
     """
-    import time
-    
     if not types:
         types = ['jpg', 'png', 'pdf', 'zip']
         
@@ -515,14 +511,12 @@ def carve_drive(drive: str, out_dir: str, max_scan_bytes: int = 100 * 1024 * 102
     return found
 
 def cmd_recover(args):
-    print(f"\\n{'=' * 60}")
+    print(f"\n{'=' * 60}")
     print(f"  SecureDelete — File Recovery")
-    print(f"{'=' * 60}\\n")
-    
+    print(f"{'=' * 60}\n")
+
     if args.deep:
         # DEEP CARVE MODE
-        import time
-        import shutil
         drive = args.deep
         limit_mb = args.limit
         if limit_mb > 0:
@@ -538,24 +532,23 @@ def cmd_recover(args):
                 total_size_estimate = shutil.disk_usage(drive).total
             except Exception:
                 total_size_estimate = 0
-        
+
         out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Recovered_Files")
-        
+
         def cli_update(current, total, found):
-            import sys
             actual_total = total if total > 0 else total_size_estimate
             if actual_total > 0:
                 pct = (current / actual_total) * 100
-                sys.stdout.write(f"\\r  [SCANNING] {format_bytes(current)} / {format_bytes(actual_total)} ({pct:.1f}%) -- Found: {found} files")
+                sys.stdout.write(f"\r  [SCANNING] {format_bytes(current)} / {format_bytes(actual_total)} ({pct:.1f}%) -- Found: {found} files")
             else:
-                sys.stdout.write(f"\\r  [SCANNING] {format_bytes(current)} -- Found: {found} files")
+                sys.stdout.write(f"\r  [SCANNING] {format_bytes(current)} -- Found: {found} files")
             sys.stdout.flush()
-            
+
         start_time = time.time()
         found = carve_drive(drive, out_dir, max_scan_bytes=limit_bytes, update_callback=cli_update)
         elapsed = time.time() - start_time
-        
-        print(f"\\n\\n  Done in {format_time(elapsed)}")
+
+        print(f"\n\n  Done in {format_time(elapsed)}")
         print(f"  {found} files successfully recovered to -> {os.path.abspath(out_dir)}")
         return
 
@@ -565,14 +558,14 @@ def cmd_recover(args):
     if not items:
         print("  Recycle Bin is empty or unable to read.")
         return
-        
+
     if args.list:
-        print(f"  Found {len(items)} item(s) in Recycle Bin:\\n")
+        print(f"  Found {len(items)} item(s) in Recycle Bin:\n")
         for idx, item in enumerate(items, 1):
             print(f"  {idx}. {item.get('Name', 'Unknown')}")
             print(f"     Original Location: {item.get('OriginalLocation', 'Unknown')}")
             print(f"     Date Deleted: {item.get('DateDeleted', 'Unknown')}")
-            print(f"     Size: {item.get('Size', 'Unknown')}\\n")
+            print(f"     Size: {item.get('Size', 'Unknown')}\n")
         return
 
     # If targets specified
@@ -582,15 +575,15 @@ def cmd_recover(args):
         if not targets:
             print("  [ERROR] None of the specified targets were found in the Recycle Bin.")
             return
-            
-    print(f"  Found {len(targets)} item(s) to recover.\\n")
-    
+
+    print(f"  Found {len(targets)} item(s) to recover.\n")
+
     if not args.force:
         confirm = input("  Recover these items to their original locations? [y/N]: ").strip().lower()
         if confirm not in ("y", "yes"):
-            print("\\n  Aborted.")
+            print("\n  Aborted.")
             return
-            
+
     success = 0
     failed = 0
     for it in targets:
@@ -599,13 +592,13 @@ def cmd_recover(args):
             success += 1
         else:
             failed += 1
-            
-    print(f"\\n{'=' * 60}")
+
+    print(f"\n{'=' * 60}")
     print(f"  Recovery Complete.")
     print(f"  Recovered: {success} item(s)")
     if failed:
         print(f"  Failed   : {failed} item(s)")
-    print(f"{'=' * 60}\\n")
+    print(f"{'=' * 60}\n")
 
 
 # ---------------------------------------------------------------------------
@@ -1462,7 +1455,7 @@ def wipe_mft_records(drive: str):
     """
     print(f"\n  Running 'cipher /w:{drive}' for MFT record cleanup...")
     print(f"  (This is a Windows built-in and may take a while)\n")
-    os.system(f"cipher /w:{drive}")
+    subprocess.run(["cipher", f"/w:{drive}"], check=False)
 
 
 def cmd_wipe(args):
