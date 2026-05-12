@@ -407,9 +407,13 @@ class SecureDeleteApp(ctk.CTk):
         )
         sys_scroll.grid(row=0, column=0, sticky="nsew", padx=(0, 5), pady=2)
 
-        ctk.CTkLabel(sys_scroll, text="🖥  SYSTEM TRACES",
+        sys_hdr = ctk.CTkFrame(sys_scroll, fg_color="transparent")
+        sys_hdr.pack(fill="x", padx=14, pady=(10, 4))
+        ctk.CTkLabel(sys_hdr, text="🖥  SYSTEM TRACES",
                      font=ctk.CTkFont("Segoe UI", 12, "bold"), text_color=MUTED
-                     ).pack(anchor="w", padx=14, pady=(10, 4))
+                     ).pack(side="left")
+        self._secondary_btn(sys_hdr, "All", self._sys_select_all, width=36, height=22).pack(side="right", padx=(2, 0))
+        self._secondary_btn(sys_hdr, "None", self._sys_deselect_all, width=42, height=22).pack(side="right", padx=(0, 2))
         ctk.CTkFrame(sys_scroll, fg_color=BORDER, height=1).pack(fill="x", padx=10, pady=(0, 6))
 
         self.sw_temp       = self._switch_row(sys_scroll, "Temp & Prefetch Files",
@@ -438,9 +442,13 @@ class SecureDeleteApp(ctk.CTk):
         )
         br_scroll.grid(row=0, column=1, sticky="nsew", padx=(5, 0), pady=2)
 
-        ctk.CTkLabel(br_scroll, text="🌐  BROWSER DATA",
+        br_hdr = ctk.CTkFrame(br_scroll, fg_color="transparent")
+        br_hdr.pack(fill="x", padx=14, pady=(10, 4))
+        ctk.CTkLabel(br_hdr, text="🌐  BROWSER DATA",
                      font=ctk.CTkFont("Segoe UI", 12, "bold"), text_color=MUTED
-                     ).pack(anchor="w", padx=14, pady=(10, 4))
+                     ).pack(side="left")
+        self._secondary_btn(br_hdr, "All", self._browser_select_all, width=36, height=22).pack(side="right", padx=(2, 0))
+        self._secondary_btn(br_hdr, "None", self._browser_deselect_all, width=42, height=22).pack(side="right", padx=(0, 2))
         ctk.CTkFrame(br_scroll, fg_color=BORDER, height=1).pack(fill="x", padx=10, pady=(0, 4))
         ctk.CTkLabel(
             br_scroll,
@@ -535,6 +543,24 @@ class SecureDeleteApp(ctk.CTk):
                 text = ""
                 color = "#444c56"
             self.after(0, lambda l=lbl, t=text, c=color: l.configure(text=t, text_color=c))
+
+    def _sys_select_all(self):
+        for sw in [self.sw_temp, self.sw_recent, self.sw_explorer,
+                   self.sw_inet, self.sw_crash, self.sw_dns, self.sw_logs]:
+            sw.select()
+
+    def _sys_deselect_all(self):
+        for sw in [self.sw_temp, self.sw_recent, self.sw_explorer,
+                   self.sw_inet, self.sw_crash, self.sw_dns, self.sw_logs]:
+            sw.deselect()
+
+    def _browser_select_all(self):
+        for sw, _, _ in self._browser_rows:
+            sw.select()
+
+    def _browser_deselect_all(self):
+        for sw, _, _ in self._browser_rows:
+            sw.deselect()
 
     # ───────────────────────────────────────────────────────────────────────
     # RECOVER TAB
