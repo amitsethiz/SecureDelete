@@ -748,12 +748,16 @@ class SecureDeleteApp(ctk.CTk):
         passes = int(self.wipe_passes.get())
 
         def _ui(current_pass, total_passes, written, free, speed):
-            pct = (written / free) if free > 0 else 0
+            # Overall progress: completed passes + fraction of current pass
+            pass_pct = (written / free) if free > 0 else 0
+            overall_pct = ((current_pass - 1) + pass_pct) / total_passes
+            eta_sec = ((free - written) / speed) if speed > 0 else 0
             text = (f"Pass {current_pass}/{total_passes}  ·  "
                     f"{format_bytes(written)} / {format_bytes(free)} "
-                    f"({pct*100:.1f}%)  ·  {format_bytes(speed)}/s")
+                    f"({pass_pct*100:.1f}%)  ·  {format_bytes(speed)}/s"
+                    + (f"  ·  ETA {format_time(eta_sec)}" if eta_sec > 0 else ""))
             self.after(0, lambda: self.wipe_status_lbl.configure(text=text))
-            self.after(0, lambda: self.wipe_progress.set(pct))
+            self.after(0, lambda: self.wipe_progress.set(overall_pct))
 
         if drive.startswith("Android:"):
             from securedelete import wipe_android_free_space
@@ -1054,19 +1058,25 @@ class SecureDeleteApp(ctk.CTk):
             self.after(0, lambda: self.deep_status_lbl.configure(text=text))
             self.after(0, lambda: self.deep_progress.set(pct))
 
-        t0 = time.time()
-        found = carve_drive(drive, out_dir, max_scan_bytes=limit_bytes,
-                            update_callback=_ui, stop_event=self.deep_stop_event)
-        elapsed = time.time() - t0
-        print(f"\n--- SCAN COMPLETE ---  {found} file(s) recovered  ({elapsed:.1f}s)\n")
+        found = 0
+        try:
+            t0 = time.time()
+            found = carve_drive(drive, out_dir, max_scan_bytes=limit_bytes,
+                                update_callback=_ui, stop_event=self.deep_stop_event)
+            elapsed = time.time() - t0
+            print(f"\n--- SCAN COMPLETE ---  {found} file(s) recovered  ({elapsed:.1f}s)\n")
 
-        if found > 0:
-            try: os.startfile(out_dir)
-            except: pass
+            if found > 0:
+                try: os.startfile(out_dir)
+                except: pass
 
-        stopped = self.deep_stop_event.is_set()
-        self.after(0, lambda: self.deep_status_lbl.configure(
-            text=f"{'🛑  Stopped' if stopped else '✅  Complete'}  ·  {found} file(s) recovered."))
+            stopped = self.deep_stop_event.is_set()
+            status = f"{'🛑  Stopped' if stopped else '✅  Complete'}  ·  {found} file(s) recovered."
+        except Exception as exc:
+            print(f"\n--- SCAN ERROR ---  {exc}\n")
+            status = f"❌  Error: {exc}"
+
+        self.after(0, lambda: self.deep_status_lbl.configure(text=status))
         self.after(0, lambda: self.deep_progress.set(1.0))
         self.after(0, lambda: self.btn_deep_action.configure(
             state="normal", text="🔍  Run Deep Scan"))
@@ -1083,7 +1093,9 @@ if __name__ == "__main__":
 
     if not is_admin():
         script = os.path.abspath(sys.argv[0])
-        args = f'"{script}" ' + " ".join(sys.argv[1:])
+        # Quote each argument individually so paths containing spaces are passed correctly
+        quoted_args = " ".join(f'"{a}"' for a in sys.argv[1:])
+        args = f'"{script}" {quoted_args}'.strip()
         ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, args, None, 1)
         sys.exit()
     else:

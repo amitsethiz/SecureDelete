@@ -1229,9 +1229,16 @@ def wipe_android_free_space(device_id: str, passes: int = 3, update_callback=Non
 
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     for p in range(1, passes + 1):
-        pass_label = {1: "ZEROS (0x00)", 2: "RANDOM", 3: "ZEROS (0x00)"}.get(p, f"RANDOM #{p}")
+        # Match PC wipe pattern: pass 1 = zeros, pass 2 = ones (via urandom alternation),
+        # pass 3+ = random — keeping it simple on Android: zeros / zeros / random
+        if p == 1:
+            pass_label = "ZEROS (0x00)"
+        elif p == 2:
+            pass_label = "ONES (0xFF)"
+        else:
+            pass_label = f"RANDOM #{p - 2}"
         print(f"\n  ── Pass {p}/{passes}: {pass_label} ──")
-        
+
         total_free = 0
         try:
             df_res = subprocess.run([adb, "-s", device_id, "shell", "df", "/sdcard"], capture_output=True, text=True, creationflags=flags)
@@ -1242,12 +1249,16 @@ def wipe_android_free_space(device_id: str, passes: int = 3, update_callback=Non
                     total_free = int(parts[3]) * 1024
         except Exception:
             pass
-            
+
         print(f"  Estimated free space: {format_bytes(total_free) if total_free else 'Unknown'}")
-        
+
         wipe_file = f"/sdcard/.secure_wipe_p{p}.bin"
         if "RANDOM" in pass_label:
             cmd = f"dd if=/dev/urandom of={wipe_file} bs=1048576"
+        elif "ONES" in pass_label:
+            # /dev/zero piped through bitwise NOT isn't easily available on Android;
+            # use tr to flip zero bytes to 0xFF as best-effort
+            cmd = f"dd if=/dev/zero bs=1048576 | tr '\\000' '\\377' > {wipe_file}"
         else:
             cmd = f"dd if=/dev/zero of={wipe_file} bs=1048576"
             
